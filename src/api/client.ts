@@ -1,6 +1,7 @@
 import type { Paginated } from "./types";
 
-const BASE = "/api/v1";
+// Empty in development (Vite proxies /api to Django); the backend URL in production builds.
+const BASE = `${import.meta.env.VITE_API_URL ?? ""}/api/v1`;
 const ACCESS_KEY = "cybermate.access";
 const REFRESH_KEY = "cybermate.refresh";
 
