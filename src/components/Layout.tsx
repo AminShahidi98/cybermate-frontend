@@ -13,6 +13,7 @@ export default function Layout() {
     { to: "/timesheets", label: "Timesheets" },
     { to: "/leave", label: "Leave requests" },
     { to: "/contracts", label: "Contracts" },
+    ...(isManager ? [{to: "/departments", label: "Departments" }] : []),
     ...(isAdmin
       ? [
           { to: "/users", label: "Users" },

@@ -10,6 +10,7 @@ import ProfilePage from "./pages/ProfilePage";
 import RolesPage from "./pages/RolesPage";
 import TimesheetsPage from "./pages/TimesheetsPage";
 import UsersPage from "./pages/UsersPage";
+import DepartmentsPage from "./pages/DepartmentsPage";
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
@@ -42,6 +43,7 @@ export default function App() {
             <Route path="leave" element={<LeavePage />} />
             <Route path="contracts" element={<ContractsPage />} />
             <Route path="profile" element={<ProfilePage />} />
+            <Route path="departments" element={<DepartmentsPage />} />
             <Route
               path="users"
               element={
