@@ -15,6 +15,25 @@ export interface Role {
   created_at: string;
 }
 
+export type DepartmentStatus = "active" | "deactive";
+
+
+export interface Department{
+  id: number;
+  name: string;
+  description: string;
+  status: DepartmentStatus;
+  created_at: string;
+}
+
+export const DEPARTMENT_STATUSES: Record<ContractType, string> = {
+  permanent: "Permanent",
+  fixed_term: "Fixed term",
+  part_time: "Part time",
+  contractor: "Contractor",
+  intern: "Internship",
+};
+
 export interface User {
   id: number;
   email: string;
@@ -86,6 +105,11 @@ export interface LeaveRequest {
   reviewed_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export const DEPARTMENT_STATUS: Record<DepartmentStatus, string> = {
+  active: "Active",
+  deactive: "Deactive"
 }
 
 export const CONTRACT_TYPES: Record<ContractType, string> = {

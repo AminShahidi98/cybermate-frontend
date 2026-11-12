@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 import { api, fetchAll } from "../api/client";
 import { CONTRACT_STATUSES, CONTRACT_TYPES, Contract, User } from "../api/types";
 import { useCurrentUser } from "../auth/AuthContext";
+import { ListToolbar, SelectCheckbox, deleteEach, rowClickToggles } from "../components/ListToolbar";
 import { ErrorBox, Field, FormModal, ListState, PageHeader, Pagination, StatusBadge } from "../components/ui";
-import { useDebounced, useFormState, usePaginated } from "../hooks";
-import { errorMessage, formatDate, formatMoney, fullName, todayISO } from "../utils";
+import { useDebounced, useFormState, usePaginated, useSelection } from "../hooks";
+import { formatDate, formatMoney, fullName, todayISO } from "../utils";
 
 export default function ContractsPage() {
   const { isManager } = useCurrentUser();
@@ -22,16 +23,20 @@ export default function ContractsPage() {
     ordering: "-start_date",
   });
   const rows = list.data?.results ?? [];
+  const selection = useSelection(rows);
 
-  async function remove(contract: Contract) {
-    if (!window.confirm(`Delete this ${CONTRACT_TYPES[contract.contract_type].toLowerCase()} contract for ${contract.user_email}? This can't be undone.`)) return;
+  async function removeSelected() {
+    const targets = selection.selected;
+    const question =
+      targets.length === 1
+        ? `Delete this ${CONTRACT_TYPES[targets[0].contract_type].toLowerCase()} contract for ${targets[0].user_email}?`
+        : `Delete these ${targets.length} contracts?`;
+    if (!window.confirm(`${question} This can't be undone.`)) return;
     setActionError("");
-    try {
-      await api(`/contracts/${contract.id}/`, { method: "DELETE" });
-      await list.reload();
-    } catch (e) {
-      setActionError(errorMessage(e));
-    }
+    setActionError(
+      await deleteEach(targets, (c) => `/contracts/${c.id}/`, (c) => `${c.user_email} (${CONTRACT_TYPES[c.contract_type]})`),
+    );
+    await list.reload();
   }
 
   return (
@@ -39,19 +44,31 @@ export default function ContractsPage() {
       <PageHeader
         title="Contracts"
         subtitle={isManager ? "Employment contracts for everyone in the company." : "Your employment contracts."}
-        actions={
-          isManager && (
-            <button className="button" onClick={() => setEditing("new")}>
-              New contract
-            </button>
-          )
-        }
       />
 
-      <div className="filters">
-        {isManager && (
-          <input type="search" placeholder="Search email or job title…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        )}
+      <ListToolbar
+        onNew={isManager ? { onClick: () => setEditing("new") } : undefined}
+        onEdit={
+          isManager
+            ? {
+                onClick: () => selection.single && setEditing(selection.single),
+                disabled: !selection.single,
+                title: selection.single ? undefined : "Select one contract to edit",
+              }
+            : undefined
+        }
+        onDelete={
+          isManager
+            ? {
+                onClick: removeSelected,
+                disabled: selection.selected.length === 0,
+                title: selection.selected.length === 0 ? "Select contracts to delete" : undefined,
+              }
+            : undefined
+        }
+        search={isManager ? { value: search, onChange: setSearch, placeholder: "Search email or job title…" } : undefined}
+        selectedCount={selection.selected.length}
+      >
         <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status">
           <option value="">All statuses</option>
           {Object.entries(CONTRACT_STATUSES).map(([value, label]) => (
@@ -68,7 +85,7 @@ export default function ContractsPage() {
             </option>
           ))}
         </select>
-      </div>
+      </ListToolbar>
 
       <ErrorBox message={actionError} />
 
@@ -77,6 +94,16 @@ export default function ContractsPage() {
           <table>
             <thead>
               <tr>
+                {isManager && (
+                  <th className="select-col">
+                    <SelectCheckbox
+                      checked={selection.allSelected}
+                      indeterminate={selection.someSelected}
+                      onChange={selection.toggleAll}
+                      label="Select all contracts on this page"
+                    />
+                  </th>
+                )}
                 {isManager && <th>Employee</th>}
                 <th>Job title</th>
                 <th>Type</th>
@@ -84,12 +111,25 @@ export default function ContractsPage() {
                 <th className="num">Hours/week</th>
                 <th className="num">Annual salary</th>
                 <th>Status</th>
-                {isManager && <th />}
               </tr>
             </thead>
             <tbody>
               {rows.map((contract) => (
-                <tr key={contract.id}>
+                <tr
+                  key={contract.id}
+                  className={isManager ? `selectable ${selection.isSelected(contract.id) ? "selected" : ""}` : undefined}
+                  onClick={isManager ? rowClickToggles(() => selection.toggle(contract.id)) : undefined}
+                >
+                  {isManager && (
+                    <td className="select-col">
+                      <input
+                        type="checkbox"
+                        checked={selection.isSelected(contract.id)}
+                        onChange={() => selection.toggle(contract.id)}
+                        aria-label={`Select contract for ${contract.user_email}`}
+                      />
+                    </td>
+                  )}
                   {isManager && <td>{contract.user_email}</td>}
                   <td>
                     {contract.job_title}
@@ -104,16 +144,6 @@ export default function ContractsPage() {
                   <td>
                     <StatusBadge status={contract.status} label={CONTRACT_STATUSES[contract.status]} />
                   </td>
-                  {isManager && (
-                    <td className="actions">
-                      <button className="link" onClick={() => setEditing(contract)}>
-                        Edit
-                      </button>
-                      <button className="link danger" onClick={() => remove(contract)}>
-                        Delete
-                      </button>
-                    </td>
-                  )}
                 </tr>
               ))}
             </tbody>

@@ -3,8 +3,9 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { LEAVE_STATUSES, LEAVE_TYPES, LeaveRequest } from "../api/types";
 import { useCurrentUser } from "../auth/AuthContext";
+import { ListToolbar, SelectCheckbox, deleteEach, rowClickToggles } from "../components/ListToolbar";
 import { ErrorBox, Field, FormModal, ListState, Modal, PageHeader, Pagination, StatusBadge } from "../components/ui";
-import { useDebounced, useFormState, usePaginated } from "../hooks";
+import { useDebounced, useFormState, usePaginated, useSelection } from "../hooks";
 import { daysBetween, errorMessage, formatDate, todayISO } from "../utils";
 
 export default function LeavePage() {
@@ -28,16 +29,22 @@ export default function LeavePage() {
   });
   const rows = list.data?.results ?? [];
   const showEmployee = isManager && !mineOnly;
+  const selection = useSelection(rows);
 
-  async function cancelRequest(leave: LeaveRequest) {
-    if (!window.confirm("Cancel this leave request?")) return;
+  // Only your own pending requests can be edited or cancelled (the API turns DELETE into "cancelled").
+  const ownPending = (leave: LeaveRequest) => leave.user === user.id && leave.status === "pending";
+  const editTarget = selection.single && ownPending(selection.single) ? selection.single : null;
+  const cancellable = selection.selected.length > 0 && selection.selected.every(ownPending);
+
+  async function cancelSelected() {
+    const targets = selection.selected;
+    const question = targets.length === 1 ? "Cancel this leave request?" : `Cancel these ${targets.length} leave requests?`;
+    if (!window.confirm(question)) return;
     setActionError("");
-    try {
-      await api(`/leave-requests/${leave.id}/`, { method: "DELETE" });
-      await list.reload();
-    } catch (e) {
-      setActionError(errorMessage(e));
-    }
+    setActionError(
+      await deleteEach(targets, (l) => `/leave-requests/${l.id}/`, (l) => `${LEAVE_TYPES[l.leave_type]} from ${formatDate(l.start_date)}`),
+    );
+    await list.reload();
   }
 
   return (
@@ -45,15 +52,32 @@ export default function LeavePage() {
       <PageHeader
         title="Leave requests"
         subtitle={isManager ? "Request time off and review your team's requests." : "Request time off and track its approval."}
-        actions={
-          <button className="button" onClick={() => setEditing("new")}>
-            Request leave
-          </button>
-        }
       />
 
-      <div className="filters">
-        <input type="search" placeholder="Search reason or email…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      <ListToolbar
+        onNew={{ onClick: () => setEditing("new") }}
+        onEdit={{
+          onClick: () => editTarget && setEditing(editTarget),
+          disabled: !editTarget,
+          title: editTarget
+            ? undefined
+            : selection.single
+              ? "Only your own pending requests can be edited"
+              : "Select one request to edit",
+        }}
+        onDelete={{
+          label: "Cancel request",
+          onClick: cancelSelected,
+          disabled: !cancellable,
+          title: cancellable
+            ? undefined
+            : selection.selected.length
+              ? "Only your own pending requests can be cancelled"
+              : "Select requests to cancel",
+        }}
+        search={{ value: search, onChange: setSearch, placeholder: "Search reason or email…" }}
+        selectedCount={selection.selected.length}
+      >
         <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status">
           <option value="">All statuses</option>
           {Object.entries(LEAVE_STATUSES).map(([value, label]) => (
@@ -76,7 +100,7 @@ export default function LeavePage() {
             Only mine
           </label>
         )}
-      </div>
+      </ListToolbar>
 
       <ErrorBox message={actionError} />
 
@@ -85,6 +109,14 @@ export default function LeavePage() {
           <table>
             <thead>
               <tr>
+                <th className="select-col">
+                  <SelectCheckbox
+                    checked={selection.allSelected}
+                    indeterminate={selection.someSelected}
+                    onChange={selection.toggleAll}
+                    label="Select all requests on this page"
+                  />
+                </th>
                 {showEmployee && <th>Employee</th>}
                 <th>Type</th>
                 <th>Dates</th>
@@ -92,56 +124,56 @@ export default function LeavePage() {
                 <th>Reason</th>
                 <th>Status</th>
                 <th>Reviewer</th>
-                <th />
+                {isManager && <th />}
               </tr>
             </thead>
             <tbody>
-              {rows.map((leave) => {
-                const own = leave.user === user.id;
-                const pending = leave.status === "pending";
-                return (
-                  <tr key={leave.id}>
-                    {showEmployee && <td>{leave.user_email}</td>}
-                    <td>{LEAVE_TYPES[leave.leave_type]}</td>
-                    <td className="nowrap">
-                      {formatDate(leave.start_date)}
-                      {leave.end_date !== leave.start_date && <> – {formatDate(leave.end_date)}</>}
-                    </td>
-                    <td className="num">{daysBetween(leave.start_date, leave.end_date)}</td>
-                    <td className="wrap">{leave.reason || "—"}</td>
-                    <td>
-                      <StatusBadge status={leave.status} label={LEAVE_STATUSES[leave.status]} />
-                    </td>
-                    <td className="small">
-                      {leave.reviewer_email ? (
-                        <>
-                          <span className="muted">{leave.reviewer_email}</span>
-                          {leave.reviewer_comment && <div className="comment">“{leave.reviewer_comment}”</div>}
-                        </>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
+              {rows.map((leave) => (
+                <tr
+                  key={leave.id}
+                  className={`selectable ${selection.isSelected(leave.id) ? "selected" : ""}`}
+                  onClick={rowClickToggles(() => selection.toggle(leave.id))}
+                >
+                  <td className="select-col">
+                    <input
+                      type="checkbox"
+                      checked={selection.isSelected(leave.id)}
+                      onChange={() => selection.toggle(leave.id)}
+                      aria-label={`Select request from ${formatDate(leave.start_date)}`}
+                    />
+                  </td>
+                  {showEmployee && <td>{leave.user_email}</td>}
+                  <td>{LEAVE_TYPES[leave.leave_type]}</td>
+                  <td className="nowrap">
+                    {formatDate(leave.start_date)}
+                    {leave.end_date !== leave.start_date && <> – {formatDate(leave.end_date)}</>}
+                  </td>
+                  <td className="num">{daysBetween(leave.start_date, leave.end_date)}</td>
+                  <td className="wrap">{leave.reason || "—"}</td>
+                  <td>
+                    <StatusBadge status={leave.status} label={LEAVE_STATUSES[leave.status]} />
+                  </td>
+                  <td className="small">
+                    {leave.reviewer_email ? (
+                      <>
+                        <span className="muted">{leave.reviewer_email}</span>
+                        {leave.reviewer_comment && <div className="comment">“{leave.reviewer_comment}”</div>}
+                      </>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                  {isManager && (
                     <td className="actions">
-                      {own && pending && (
-                        <>
-                          <button className="link" onClick={() => setEditing(leave)}>
-                            Edit
-                          </button>
-                          <button className="link danger" onClick={() => cancelRequest(leave)}>
-                            Cancel
-                          </button>
-                        </>
-                      )}
-                      {isManager && pending && (
+                      {leave.status === "pending" && (
                         <button className="link success" onClick={() => setReviewing(leave)}>
                           Review
                         </button>
                       )}
                     </td>
-                  </tr>
-                );
-              })}
+                  )}
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

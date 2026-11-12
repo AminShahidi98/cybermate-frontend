@@ -3,8 +3,9 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { TIMESHEET_STATUSES, Timesheet } from "../api/types";
 import { useCurrentUser } from "../auth/AuthContext";
+import { ListToolbar, SelectCheckbox, deleteEach, rowClickToggles } from "../components/ListToolbar";
 import { ErrorBox, Field, FormModal, ListState, PageHeader, Pagination, StatusBadge } from "../components/ui";
-import { useDebounced, useFormState, usePaginated } from "../hooks";
+import { useDebounced, useFormState, usePaginated, useSelection } from "../hooks";
 import { errorMessage, formatDate, formatDateTime, todayISO } from "../utils";
 
 export default function TimesheetsPage() {
@@ -25,6 +26,13 @@ export default function TimesheetsPage() {
   });
   const rows = list.data?.results ?? [];
   const showEmployee = isManager && !mineOnly;
+  const selection = useSelection(rows);
+
+  // You can edit your own draft or rejected entries, and delete your own drafts.
+  const canEdit = (entry: Timesheet) => entry.user === user.id && (entry.status === "draft" || entry.status === "rejected");
+  const canDelete = (entry: Timesheet) => entry.user === user.id && entry.status === "draft";
+  const editTarget = selection.single && canEdit(selection.single) ? selection.single : null;
+  const deletable = selection.selected.length > 0 && selection.selected.every(canDelete);
 
   async function run(action: () => Promise<unknown>, confirmText?: string) {
     if (confirmText && !window.confirm(confirmText)) return;
@@ -37,20 +45,47 @@ export default function TimesheetsPage() {
     }
   }
 
+  async function removeSelected() {
+    const targets = selection.selected;
+    const question = targets.length === 1 ? "Delete this draft entry?" : `Delete these ${targets.length} draft entries?`;
+    if (!window.confirm(question)) return;
+    setActionError("");
+    setActionError(
+      await deleteEach(targets, (t) => `/timesheets/${t.id}/`, (t) => `${formatDate(t.work_date)} ${t.project || ""}`.trim()),
+    );
+    await list.reload();
+  }
+
   return (
     <>
       <PageHeader
         title="Timesheets"
         subtitle={isManager ? "Log your hours and review your team's entries." : "Log your hours and submit them for approval."}
-        actions={
-          <button className="button" onClick={() => setEditing("new")}>
-            Log hours
-          </button>
-        }
       />
 
-      <div className="filters">
-        <input type="search" placeholder="Search project, client, description…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      <ListToolbar
+        onNew={{ onClick: () => setEditing("new") }}
+        onEdit={{
+          onClick: () => editTarget && setEditing(editTarget),
+          disabled: !editTarget,
+          title: editTarget
+            ? undefined
+            : selection.single
+              ? "Only your own draft or rejected entries can be edited"
+              : "Select one entry to edit",
+        }}
+        onDelete={{
+          onClick: removeSelected,
+          disabled: !deletable,
+          title: deletable
+            ? undefined
+            : selection.selected.length
+              ? "Only your own draft entries can be deleted"
+              : "Select entries to delete",
+        }}
+        search={{ value: search, onChange: setSearch, placeholder: "Search project, client, description…" }}
+        selectedCount={selection.selected.length}
+      >
         <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status">
           <option value="">All statuses</option>
           {Object.entries(TIMESHEET_STATUSES).map(([value, label]) => (
@@ -65,7 +100,7 @@ export default function TimesheetsPage() {
             Only mine
           </label>
         )}
-      </div>
+      </ListToolbar>
 
       <ErrorBox message={actionError} />
 
@@ -74,6 +109,14 @@ export default function TimesheetsPage() {
           <table>
             <thead>
               <tr>
+                <th className="select-col">
+                  <SelectCheckbox
+                    checked={selection.allSelected}
+                    indeterminate={selection.someSelected}
+                    onChange={selection.toggleAll}
+                    label="Select all entries on this page"
+                  />
+                </th>
                 <th>Date</th>
                 {showEmployee && <th>Employee</th>}
                 <th>Project</th>
@@ -86,75 +129,70 @@ export default function TimesheetsPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((entry) => {
-                const own = entry.user === user.id;
-                const editable = own && (entry.status === "draft" || entry.status === "rejected");
-                return (
-                  <tr key={entry.id}>
-                    <td className="nowrap">{formatDate(entry.work_date)}</td>
-                    {showEmployee && <td>{entry.user_email}</td>}
-                    <td>{entry.project || "—"}</td>
-                    <td>{entry.client || "—"}</td>
-                    <td className="num">{Number(entry.hours)}</td>
-                    <td className="wrap">{entry.description || "—"}</td>
-                    <td>
-                      <StatusBadge status={entry.status} label={TIMESHEET_STATUSES[entry.status]} />
-                    </td>
-                    <td className="small muted">
-                      {entry.reviewer_email ? (
-                        <>
-                          {entry.reviewer_email}
-                          <br />
-                          {formatDateTime(entry.reviewed_at)}
-                        </>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td className="actions">
-                      {editable && (
-                        <>
-                          <button className="link" onClick={() => setEditing(entry)}>
-                            Edit
-                          </button>
-                          <button className="link" onClick={() => run(() => api(`/timesheets/${entry.id}/submit/`, { method: "POST" }))}>
-                            Submit
-                          </button>
-                        </>
-                      )}
-                      {own && entry.status === "draft" && (
+              {rows.map((entry) => (
+                <tr
+                  key={entry.id}
+                  className={`selectable ${selection.isSelected(entry.id) ? "selected" : ""}`}
+                  onClick={rowClickToggles(() => selection.toggle(entry.id))}
+                >
+                  <td className="select-col">
+                    <input
+                      type="checkbox"
+                      checked={selection.isSelected(entry.id)}
+                      onChange={() => selection.toggle(entry.id)}
+                      aria-label={`Select entry for ${formatDate(entry.work_date)}`}
+                    />
+                  </td>
+                  <td className="nowrap">{formatDate(entry.work_date)}</td>
+                  {showEmployee && <td>{entry.user_email}</td>}
+                  <td>{entry.project || "—"}</td>
+                  <td>{entry.client || "—"}</td>
+                  <td className="num">{Number(entry.hours)}</td>
+                  <td className="wrap">{entry.description || "—"}</td>
+                  <td>
+                    <StatusBadge status={entry.status} label={TIMESHEET_STATUSES[entry.status]} />
+                  </td>
+                  <td className="small muted">
+                    {entry.reviewer_email ? (
+                      <>
+                        {entry.reviewer_email}
+                        <br />
+                        {formatDateTime(entry.reviewed_at)}
+                      </>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td className="actions">
+                    {canEdit(entry) && (
+                      <button className="link" onClick={() => run(() => api(`/timesheets/${entry.id}/submit/`, { method: "POST" }))}>
+                        Submit
+                      </button>
+                    )}
+                    {isManager && entry.status === "submitted" && (
+                      <>
+                        <button
+                          className="link success"
+                          onClick={() => run(() => api(`/timesheets/${entry.id}/review/`, { method: "POST", body: { decision: "approved" } }))}
+                        >
+                          Approve
+                        </button>
                         <button
                           className="link danger"
-                          onClick={() => run(() => api(`/timesheets/${entry.id}/`, { method: "DELETE" }), "Delete this draft entry?")}
+                          onClick={() =>
+                            run(
+                              () => api(`/timesheets/${entry.id}/review/`, { method: "POST", body: { decision: "rejected" } }),
+                              `Reject ${entry.user_email}'s entry for ${formatDate(entry.work_date)}?`,
+                            )
+                          }
                         >
-                          Delete
+                          Reject
                         </button>
-                      )}
-                      {isManager && entry.status === "submitted" && (
-                        <>
-                          <button
-                            className="link success"
-                            onClick={() => run(() => api(`/timesheets/${entry.id}/review/`, { method: "POST", body: { decision: "approved" } }))}
-                          >
-                            Approve
-                          </button>
-                          <button
-                            className="link danger"
-                            onClick={() =>
-                              run(
-                                () => api(`/timesheets/${entry.id}/review/`, { method: "POST", body: { decision: "rejected" } }),
-                                `Reject ${entry.user_email}'s entry for ${formatDate(entry.work_date)}?`,
-                              )
-                            }
-                          >
-                            Reject
-                          </button>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

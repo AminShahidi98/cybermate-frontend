@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 import { api, fetchAll } from "../api/client";
 import { Role, User } from "../api/types";
 import { useCurrentUser } from "../auth/AuthContext";
+import { ListToolbar, SelectCheckbox, deleteEach, rowClickToggles } from "../components/ListToolbar";
 import { ErrorBox, Field, FormModal, ListState, PageHeader, Pagination } from "../components/ui";
-import { useDebounced, useFormState, usePaginated } from "../hooks";
-import { errorMessage, formatDate, fullName } from "../utils";
+import { useDebounced, useFormState, usePaginated, useSelection } from "../hooks";
+import { formatDate, fullName } from "../utils";
 
 export default function UsersPage() {
   const { user: me } = useCurrentUser();
@@ -16,6 +17,8 @@ export default function UsersPage() {
 
   const list = usePaginated<User>("/users/", { search: debouncedSearch, ordering: "first_name" });
   const rows = list.data?.results ?? [];
+  const selection = useSelection(rows);
+  const includesMe = selection.selected.some((u) => u.id === me.id);
 
   useEffect(() => {
     fetchAll<Role>("/roles/")
@@ -23,32 +26,37 @@ export default function UsersPage() {
       .catch(() => setRoles([]));
   }, []);
 
-  async function remove(target: User) {
-    if (!window.confirm(`Delete ${fullName(target)} (${target.email})? Their contracts, timesheets and leave requests are deleted too. This can't be undone.`)) return;
+  async function removeSelected() {
+    const targets = selection.selected;
+    const question =
+      targets.length === 1
+        ? `Delete ${fullName(targets[0])} (${targets[0].email})?`
+        : `Delete these ${targets.length} users?`;
+    if (!window.confirm(`${question} Their contracts, timesheets and leave requests are deleted too. This can't be undone.`)) return;
     setActionError("");
-    try {
-      await api(`/users/${target.id}/`, { method: "DELETE" });
-      await list.reload();
-    } catch (e) {
-      setActionError(errorMessage(e));
-    }
+    setActionError(await deleteEach(targets, (u) => `/users/${u.id}/`, (u) => u.email));
+    await list.reload();
   }
 
   return (
     <>
-      <PageHeader
-        title="Users"
-        subtitle="Everyone who can sign in, and their roles."
-        actions={
-          <button className="button" onClick={() => setEditing("new")}>
-            Add user
-          </button>
-        }
-      />
+      <PageHeader title="Users" subtitle="Everyone who can sign in, and their roles." />
 
-      <div className="filters">
-        <input type="search" placeholder="Search name, email, department…" value={search} onChange={(e) => setSearch(e.target.value)} />
-      </div>
+      <ListToolbar
+        onNew={{ onClick: () => setEditing("new") }}
+        onEdit={{
+          onClick: () => selection.single && setEditing(selection.single),
+          disabled: !selection.single,
+          title: selection.single ? undefined : "Select one user to edit",
+        }}
+        onDelete={{
+          onClick: removeSelected,
+          disabled: selection.selected.length === 0 || includesMe,
+          title: includesMe ? "You can't delete your own account" : selection.selected.length === 0 ? "Select users to delete" : undefined,
+        }}
+        search={{ value: search, onChange: setSearch, placeholder: "Search name, email, department…" }}
+        selectedCount={selection.selected.length}
+      />
 
       <ErrorBox message={actionError} />
 
@@ -57,18 +65,37 @@ export default function UsersPage() {
           <table>
             <thead>
               <tr>
+                <th className="select-col">
+                  <SelectCheckbox
+                    checked={selection.allSelected}
+                    indeterminate={selection.someSelected}
+                    onChange={selection.toggleAll}
+                    label="Select all users on this page"
+                  />
+                </th>
                 <th>Name</th>
                 <th>Email</th>
                 <th>Department</th>
                 <th>Job title</th>
                 <th>Roles</th>
                 <th>Joined</th>
-                <th />
               </tr>
             </thead>
             <tbody>
               {rows.map((u) => (
-                <tr key={u.id} className={u.is_active ? "" : "inactive"}>
+                <tr
+                  key={u.id}
+                  className={["selectable", u.is_active ? "" : "inactive", selection.isSelected(u.id) ? "selected" : ""].join(" ")}
+                  onClick={rowClickToggles(() => selection.toggle(u.id))}
+                >
+                  <td className="select-col">
+                    <input
+                      type="checkbox"
+                      checked={selection.isSelected(u.id)}
+                      onChange={() => selection.toggle(u.id)}
+                      aria-label={`Select ${fullName(u)}`}
+                    />
+                  </td>
                   <td>
                     {fullName(u)}
                     {!u.is_active && <span className="badge badge-ended">Inactive</span>}
@@ -88,16 +115,6 @@ export default function UsersPage() {
                     )}
                   </td>
                   <td className="nowrap">{formatDate(u.created_at)}</td>
-                  <td className="actions">
-                    <button className="link" onClick={() => setEditing(u)}>
-                      Edit
-                    </button>
-                    {u.id !== me.id && (
-                      <button className="link danger" onClick={() => remove(u)}>
-                        Delete
-                      </button>
-                    )}
-                  </td>
                 </tr>
               ))}
             </tbody>

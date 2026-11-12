@@ -1,4 +1,4 @@
-import { ChangeEvent, useCallback, useEffect, useState } from "react";
+import { ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api/client";
 import type { Paginated } from "./api/types";
 import { errorMessage } from "./utils";
@@ -45,6 +45,52 @@ export function useDebounced<T>(value: T, delay = 300): T {
     return () => window.clearTimeout(id);
   }, [value, delay]);
   return debounced;
+}
+
+/**
+ * Tracks which table rows are ticked. Only rows that are still on screen stay selected,
+ * so changing page, filtering or reloading after a delete drops the rest automatically.
+ */
+export function useSelection<T extends { id: number }>(rows: T[]) {
+  const [ids, setIds] = useState<Set<number>>(() => new Set());
+
+  useEffect(() => {
+    setIds((current) => {
+      const visible = new Set(rows.map((row) => row.id));
+      const kept = [...current].filter((id) => visible.has(id));
+      return kept.length === current.size ? current : new Set(kept);
+    });
+  }, [rows]);
+
+  const selected = useMemo(() => rows.filter((row) => ids.has(row.id)), [rows, ids]);
+  const allSelected = rows.length > 0 && selected.length === rows.length;
+
+  const toggle = useCallback((id: number) => {
+    setIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleAll = useCallback(() => {
+    setIds(allSelected ? new Set() : new Set(rows.map((row) => row.id)));
+  }, [allSelected, rows]);
+
+  const clear = useCallback(() => setIds(new Set()), []);
+
+  return {
+    selected,
+    /** The one selected row, or null when zero or several are selected. */
+    single: selected.length === 1 ? selected[0] : null,
+    isSelected: (id: number) => ids.has(id),
+    toggle,
+    toggleAll,
+    clear,
+    allSelected,
+    someSelected: selected.length > 0 && !allSelected,
+  };
 }
 
 type FieldElement = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
